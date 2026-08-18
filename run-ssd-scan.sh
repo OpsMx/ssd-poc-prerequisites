@@ -17,22 +17,27 @@ cleanup() {
   local exit_code=$?
   if [ $exit_code -ne 0 ]; then
     log_error "Scan execution failed. Exit code: $exit_code"
-    log_error "Please review the messages above and share the complete output with the OpsMx team if needed."
   fi
 }
 trap cleanup EXIT
 
-SOURCE_DIR="${1:-/root/SunSystems}"
+# --------------------------------------------------
+# Default source directory = current working directory
+# User can optionally pass a custom path
+# --------------------------------------------------
+SOURCE_DIR="${1:-$PWD}"
 
-ARTIFACT_NAME="SunSystems"
+ARTIFACT_NAME=$(basename "$SOURCE_DIR")
 REPOSITORY_URL="https://OpsMx-POC@dev.azure.com/OpsMx-POC/ask/_git/ask"
-BRANCH="main"
-UPLOAD_URL="https://customer-poc-demo.ssd-sandbox.opsmx.org"
+BRANCH="master"
+UPLOAD_URL="https://isg-lts.ssd-sandbox.opsmx.org"
 CLI_IMAGE="docker.io/opsmx11/ssd-scanner-cli:v0.6.7"
 TOOL="azure"
 
-SSD_TOKEN="${SSD_TOKEN:-REPLACE_WITH_SSD_TOKEN}"
+# Token must be exported before running
+SSD_TOKEN="${SSD_TOKEN:-}"
 
+# Auto-generate unique build id and artifact tag
 UNIQUE_ID=$(date +%Y%m%d%H%M%S)
 
 echo
@@ -42,24 +47,14 @@ echo "============================================================"
 echo
 
 log_info "Source directory : $SOURCE_DIR"
+log_info "Artifact name    : $ARTIFACT_NAME"
 log_info "Build ID         : $UNIQUE_ID"
 log_info "Artifact Tag     : $UNIQUE_ID"
 
 echo
 log_info "Performing pre-flight checks..."
 
-if [ "$(id -u)" -eq 0 ]; then
-  log_warn "Running as root user."
-else
-  if sudo -n true 2>/dev/null; then
-    log_info "Sudo access: available"
-  else
-    log_error "Current user does not have passwordless sudo access."
-    log_error "Please run with a user having sudo privileges or configure passwordless sudo."
-    exit 1
-  fi
-fi
-
+# Check source directory
 if [ ! -d "$SOURCE_DIR" ]; then
   log_error "Source directory does not exist: $SOURCE_DIR"
   exit 1
@@ -75,35 +70,36 @@ if [ -z "$(ls -A "$SOURCE_DIR" 2>/dev/null)" ]; then
   exit 1
 fi
 
+# Check Docker installation
 if ! command -v docker >/dev/null 2>&1; then
   log_error "Docker is not installed or not available in PATH."
-  log_error "Install Docker and try again."
   exit 1
 fi
 
+# Check Docker daemon
 if ! docker info >/dev/null 2>&1; then
   log_error "Docker daemon is not running or current user cannot access Docker."
-  log_error "Start Docker service and ensure the user is part of the docker group."
+  log_error "Try: sudo systemctl start docker"
   exit 1
 fi
 
-if [[ "$SSD_TOKEN" == "REPLACE_WITH_SSD_TOKEN" || -z "$SSD_TOKEN" ]]; then
-  log_error "SSD token is not configured."
-  log_error "Edit this script and replace REPLACE_WITH_SSD_TOKEN with the actual token,"
-  log_error "or export SSD_TOKEN before running the script."
+# Check SSD token
+if [ -z "$SSD_TOKEN" ]; then
+  log_error "SSD_TOKEN is not set."
+  echo
+  echo "Please export the token before running the scan:"
+  echo
+  echo "  export SSD_TOKEN='your-token-here'"
+  echo "  ./run-ssd-scan.sh"
+  echo
   exit 1
 fi
 
-if ! curl -fsSL --connect-timeout 10 "$UPLOAD_URL/health" >/dev/null 2>&1; then
-  log_warn "Unable to verify connectivity to SSD upload URL."
-  log_warn "The scan may still work if the endpoint is reachable during upload."
-fi
-
+# Pull image
 log_info "Pulling SSD CLI image: $CLI_IMAGE"
 
 if ! docker pull "$CLI_IMAGE"; then
-  log_error "Failed to pull Docker image: $CLI_IMAGE"
-  log_error "Check internet connectivity and Docker registry access."
+  log_error "Failed to pull Docker image."
   exit 1
 fi
 
@@ -112,7 +108,7 @@ log_success "Pre-flight checks completed successfully."
 echo
 log_info "Starting SSD scan..."
 
-if docker run --rm \
+docker run --rm \
   -v "$SOURCE_DIR:/home/scanner/source:rw" \
   "$CLI_IMAGE" \
     --scanners=cdxgen \
@@ -127,18 +123,12 @@ if docker run --rm \
     --artifact-name="$ARTIFACT_NAME" \
     --artifact-path=/home/scanner/source \
     --keep-results=true \
-    --tool="$TOOL" \
     --debug=false \
     --artifact-tag="$UNIQUE_ID" \
-    --ssd-token="$SSD_TOKEN"; then
+    --ssd-token="$SSD_TOKEN"
 
-  echo
-  log_success "SSD scan completed successfully."
-  log_info "Build ID     : $UNIQUE_ID"
-  log_info "Artifact Tag : $UNIQUE_ID"
-  echo
-
-else
-  log_error "Docker scan command failed."
-  exit 1
-fi
+echo
+log_success "SSD scan completed successfully."
+log_info "Build ID     : $UNIQUE_ID"
+log_info "Artifact Tag : $UNIQUE_ID"
+echo
