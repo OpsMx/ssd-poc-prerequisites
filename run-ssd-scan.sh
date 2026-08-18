@@ -108,7 +108,7 @@ log_success "Pre-flight checks completed successfully."
 echo
 log_info "Starting SSD scan..."
 
-docker run --rm \
+sudo docker run --rm \
   -v "$SOURCE_DIR:/home/scanner/source:rw" \
   "$CLI_IMAGE" \
     --scanners=cdxgen \
