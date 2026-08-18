@@ -30,7 +30,7 @@ SOURCE_DIR="${1:-$PWD}"
 ARTIFACT_NAME=$(basename "$SOURCE_DIR")
 REPOSITORY_URL="https://OpsMx-POC@dev.azure.com/OpsMx-POC/ask/_git/ask"
 BRANCH="master"
-UPLOAD_URL="https://isg-lts.ssd-sandbox.opsmx.org"
+UPLOAD_URL="https://ec.ssd-sandbox.opsmx.org"
 CLI_IMAGE="docker.io/opsmx11/ssd-scanner-cli:v0.6.7"
 TOOL="azure"
 
