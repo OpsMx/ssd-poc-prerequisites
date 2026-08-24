@@ -108,11 +108,14 @@ log_success "Pre-flight checks completed successfully."
 echo
 log_info "Starting SSD scan..."
 
-sudo docker run --rm \
+docker run --rm \
   -v "$SOURCE_DIR:/home/scanner/source:rw" \
+  -v "/var/cache/ssd-scanner/toolchains:/var/cache/ssd-scanner/toolchains:rw" \
   "$CLI_IMAGE" \
-    --scanners=cdxgen \
+    --scanners=cdxgen,semgrep,trivy \
     --cdxgen-scanners=sourcecodesbom \
+    --cdxgen-install-deps=false \
+    --trivy-scanners=codelicensescan,codesecretscan \
     --source-code-path=/home/scanner/source \
     --repository-url="$REPOSITORY_URL" \
     --branch="$BRANCH" \
