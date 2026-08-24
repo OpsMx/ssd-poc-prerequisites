@@ -112,9 +112,8 @@ docker run --rm \
   -v "$SOURCE_DIR:/home/scanner/source:rw" \
   -v "/var/cache/ssd-scanner/toolchains:/var/cache/ssd-scanner/toolchains:rw" \
   "$CLI_IMAGE" \
-    --scanners=cdxgen,semgrep,trivy \
-    --cdxgen-scanners=sourcecodesbom \
-    --cdxgen-install-deps=false \
+    --scanners=syft,trivy \
+    --syft-scanners=sourcecodesbom \
     --trivy-scanners=codelicensescan,codesecretscan \
     --source-code-path=/home/scanner/source \
     --repository-url="$REPOSITORY_URL" \
