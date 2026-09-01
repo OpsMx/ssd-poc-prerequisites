@@ -31,7 +31,7 @@ ARTIFACT_NAME=$(basename "$SOURCE_DIR")
 REPOSITORY_URL="https://OpsMx-POC@dev.azure.com/OpsMx-POC/ask/_git/ask"
 BRANCH="master"
 UPLOAD_URL="https://ec.ssd-sandbox.opsmx.org"
-CLI_IMAGE="docker.io/opsmx11/ssd-scanner-cli:v0.6.7"
+CLI_IMAGE="docker.io/opsmx11/ssd-scanner-cli:v0.6.9"
 TOOL="azure"
 
 # Token must be exported before running
@@ -112,8 +112,9 @@ docker run --rm \
   -v "$SOURCE_DIR:/home/scanner/source:rw" \
   -v "/var/cache/ssd-scanner/toolchains:/var/cache/ssd-scanner/toolchains:rw" \
   "$CLI_IMAGE" \
-    --scanners=syft,trivy \
-    --syft-scanners=sourcecodesbom \
+    --scanners=cdxgen,semgrep,trivy \
+    --cdxgen-scanners=sourcecodesbom \
+    --cdxgen-install-deps=false \
     --trivy-scanners=codelicensescan,codesecretscan \
     --source-code-path=/home/scanner/source \
     --repository-url="$REPOSITORY_URL" \
