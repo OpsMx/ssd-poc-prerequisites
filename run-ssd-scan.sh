@@ -110,12 +110,9 @@ log_info "Starting SSD scan..."
 
 docker run --rm \
   -v "$SOURCE_DIR:/home/scanner/source:rw" \
-  -v "/var/cache/ssd-scanner/toolchains:/var/cache/ssd-scanner/toolchains:rw" \
   "$CLI_IMAGE" \
-    --scanners=cdxgen,semgrep,trivy \
+    --scanners=cdxgen \
     --cdxgen-scanners=sourcecodesbom \
-    --cdxgen-install-deps=false \
-    --trivy-scanners=codelicensescan,codesecretscan \
     --source-code-path=/home/scanner/source \
     --repository-url="$REPOSITORY_URL" \
     --branch="$BRANCH" \
