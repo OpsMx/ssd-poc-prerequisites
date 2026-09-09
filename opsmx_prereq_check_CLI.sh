@@ -113,7 +113,7 @@ echo -e "${BOLD}URL Whitelisting / Connectivity Validation${RESET}"
 printf "%-35s %-28s %s\n" "URL / Host" "Status" "Comment"
 printf "%-35s %-28s %s\n" "-----------------------------------" "----------------------------" "---------------------------------------------"
 
-check_url "customer-poc-demo.ssd-sandbox.opsmx.org" "customer-poc-demo.ssd-sandbox.opsmx.org"
+check_url "instance.ssdpoc.opsmx.net" "instance.ssdpoc.opsmx.net"
 check_url "builds.dotnet.microsoft.com" "builds.dotnet.microsoft.com"
 check_url "registry-1.docker.io" "registry-1.docker.io"
 check_url "auth.docker.io" "auth.docker.io"
