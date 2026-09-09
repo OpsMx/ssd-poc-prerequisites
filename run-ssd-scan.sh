@@ -30,7 +30,7 @@ SOURCE_DIR="${1:-$PWD}"
 ARTIFACT_NAME=$(basename "$SOURCE_DIR")
 REPOSITORY_URL="https://OpsMx-POC@dev.azure.com/OpsMx-POC/ask/_git/ask"
 BRANCH="master"
-UPLOAD_URL="https://ec.ssd-sandbox.opsmx.org"
+UPLOAD_URL="https://instance.ssdpoc.opsmx.net"
 CLI_IMAGE="docker.io/opsmx11/ssd-scanner-cli:v0.6.9"
 TOOL="azure"
 
@@ -111,8 +111,9 @@ log_info "Starting SSD scan..."
 docker run --rm \
   -v "$SOURCE_DIR:/home/scanner/source:rw" \
   "$CLI_IMAGE" \
-    --scanners=cdxgen \
+    --scanners=cdxgen,semgrep,trivy \
     --cdxgen-scanners=sourcecodesbom \
+    --trivy-scanners=codelicensescan,codesecretscan \
     --source-code-path=/home/scanner/source \
     --repository-url="$REPOSITORY_URL" \
     --branch="$BRANCH" \
