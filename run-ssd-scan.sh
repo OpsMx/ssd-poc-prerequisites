@@ -245,6 +245,10 @@ jq '
     elif ((.name // "") == "catalina" and (.version // "") == "9.0.88") then
       {group:"org.apache.tomcat", name:"tomcat-catalina", version:"9.0.88"}
     elif ((.name // "") == "catalina-ant" and (.version // "") == "9.0.88") then
+      {group:"org.apache.tomcat", name:"tomcat-catalina-ant", version:"9.0.88"} 
+    elif ((.name // "") == "bootstrap:bootstrap" and (.version // "") == "9.0.88") then
+      {group:"org.apache.tomcat", name:"tomcat-bootstrap", version:"9.0.88"}
+    elif ((.name // "") == "catalina-ant:catalina-ant" and (.version // "") == "9.0.88") then
       {group:"org.apache.tomcat", name:"tomcat-catalina-ant", version:"9.0.88"}
     elif ((.name // "") == "catalina-ha" and (.version // "") == "9.0.88") then
       {group:"org.apache.tomcat", name:"tomcat-catalina-ha", version:"9.0.88"}
@@ -278,7 +282,7 @@ jq '
     elif ((.name // "") == "tomcat-dbcp" and (.version // "") == "9.0.88") then
       {group:"org.apache.tomcat", name:"tomcat-dbcp", version:"9.0.88"}
     elif ((.name // "") | test("^tomcat-i18n-")) and (.version // "") == "9.0.88" then
-      {group:"org.apache.tomcat", name:.name, version:"9.0.88"}
+      {group:"org.apache.tomcat", name:(if (.name | contains(":")) then (.name | split(":")[0]) else .name end), version:"9.0.88"}
     elif ((.name // "") == "tomcat-jdbc" and (.version // "") == "9.0.88") then
       {group:"org.apache.tomcat", name:"tomcat-jdbc", version:"9.0.88"}
     elif ((.name // "") == "tomcat-jni" and (.version // "") == "9.0.88") then
