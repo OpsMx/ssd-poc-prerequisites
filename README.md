@@ -1,193 +1,67 @@
 # OpsMx Delivery Shield - PoC Scan Runner
 
-This package provides a simplified and customer-friendly way to trigger an OpsMx Delivery Shield (SSD) source scan during a PoC.
-
-The script automatically:
-
-- Generates a unique **Build ID**
-- Generates a unique **Artifact Tag**
-- Validates **sudo access**
-- Validates **Docker installation**
-- Validates **Docker daemon access**
-- Validates **source directory**
-- Validates **SSD token configuration**
-- Pulls the required SSD CLI image
-- Displays clear success and error messages
-
----
+Scripts to check a PoC machine and run OpsMx Delivery Shield (SSD) scans with the SSD scanner CLI.
 
 ## Files
 
-- `run-ssd-scan.sh` - Main scan script
-- `README.md` - This document
+- `opsmx_prereq_check_CLI.sh` - checks the machine and network prerequisites
+- `run-ssd-scan.sh` - scans source code or a container image and submits the results to SSD
 
----
+## Get the latest scripts
+
+```bash
+git clone https://github.com/OpsMx/ssd-poc-prerequisites.git
+cd ssd-poc-prerequisites
+chmod +x *.sh
+```
+
+Or download only the scan script:
+```bash
+curl -fsSLO https://raw.githubusercontent.com/OpsMx/ssd-poc-prerequisites/main/run-ssd-scan.sh && chmod +x run-ssd-scan.sh
+```
 
 ## Prerequisites
 
-- Ubuntu 20.04 or later
-- Docker installed and running
-- Internet access to pull Docker images
-- Internet access to reach the SSD upload URL
-- Source code available on the VM
-
----
-
-## Step 1: Download the package
-
-Copy both files to the Linux VM where the scan will be executed.
-
----
-
-## Step 2: Configure the SSD token
-
-Open the script:
+- Linux or macOS with Docker installed and running
+- Internet access to Docker Hub and to the SSD URL
 
 ```bash
-vi run-ssd-scan.sh
+./opsmx_prereq_check_CLI.sh
 ```
 
-Find:
+## Run a scan
 
 ```bash
-SSD_TOKEN="${SSD_TOKEN:-REPLACE_WITH_SSD_TOKEN}"
+export SSD_UPLOAD_URL=https://<ssd-host>
+export SSD_TOKEN='<team-token>'
+
+./run-ssd-scan.sh /path/to/repo           # source-code folder (git clone)
+./run-ssd-scan.sh /path/to/source.tar.gz  # source-code archive: .tar, .tar.gz or .tgz
+./run-ssd-scan.sh /path/to/image.tar      # container image: docker save <image> -o image.tar
+./run-ssd-scan.sh myapp:1.0               # container image already on this machine
 ```
 
-Replace `REPLACE_WITH_SSD_TOKEN` with the token shared by the OpsMx team.
-
-Save and exit.
-
----
-
-## Step 3: Make the script executable
-
+For a source folder that is not a git clone, or a source archive, also set the repository it came from:
 ```bash
-chmod +x run-ssd-scan.sh
+export REPO_URL=https://github.com/<org>/<repo>
+export BRANCH_NAME=main
 ```
 
----
+Optional settings:
 
-## Step 4: Run the scan
+| Variable | Default | Purpose |
+|---|---|---|
+| `SBOM_TOOLS` | `cdxgen,syft` | SBOM tools to run; SSD uses the one selected for the team (e.g. `SBOM_TOOLS=cdxgen`) |
+| `SCANNERS` | source: `cdxgen,syft,trivy,opengrep`; image: `cdxgen,syft` | full scanner list |
+| `CLI_IMAGE` | `docker.io/opsmx11/ssd-scanner-cli:v0.6.17` | scanner image |
 
-### Option A - Use default source path
-
-Default path:
-
-```bash
-/root/SunSystems
-```
-
-Run:
-
-```bash
-./run-ssd-scan.sh
-```
-
-### Option B - Provide a custom source path
-
-```bash
-./run-ssd-scan.sh /path/to/source-code
-```
-
-Example:
-
-```bash
-./run-ssd-scan.sh /home/ubuntu/my-application
-```
-
----
-
-## What the script does
-
-### Pre-flight checks
-
-- Checks whether the user has sudo access
-- Checks whether the source directory exists
-- Checks whether the source directory is readable
-- Checks whether the source directory is not empty
-- Checks whether Docker is installed
-- Checks whether Docker daemon is running
-- Checks whether SSD token is configured
-- Verifies connectivity to the SSD endpoint (best effort)
-
-### Scan execution
-
-- Pulls the latest SSD CLI image
-- Mounts the source directory
-- Generates a timestamp-based Build ID
-- Generates a timestamp-based Artifact Tag
-- Uploads results to the SSD server
-
----
-
-## Example output
-
-```text
-[INFO] Source directory : /root/SunSystems
-[INFO] Build ID         : 20260814104530
-[INFO] Artifact Tag     : 20260814104530
-
-[INFO] Performing pre-flight checks...
-[INFO] Sudo access: available
-[SUCCESS] Pre-flight checks completed successfully.
-
-[INFO] Starting SSD scan...
-
-[SUCCESS] SSD scan completed successfully.
-```
-
----
+The script exits once SSD accepts the scan and prints a link to the results, which appear in the UI a few minutes later. C# scans take longer (about 7-8 minutes) because the scanner downloads a .NET SDK first.
 
 ## Common errors
 
-### Docker is not installed
-
-```text
-[ERROR] Docker is not installed or not available in PATH.
-```
-
-Install Docker and retry.
-
-### Docker daemon not running
-
-```text
-[ERROR] Docker daemon is not running or current user cannot access Docker.
-```
-
-Start Docker:
-
-```bash
-sudo systemctl start docker
-```
-
-### Source directory missing
-
-```text
-[ERROR] Source directory does not exist.
-```
-
-Verify the path and run again.
-
-### Source directory empty
-
-```text
-[ERROR] Source directory is empty.
-```
-
-Ensure the application source code is present.
-
-### SSD token not configured
-
-```text
-[ERROR] SSD token is not configured.
-```
-
-Edit the script and add the token.
-
----
-
-## Notes
-
-- Build ID and Artifact Tag are generated automatically using the current timestamp.
-- No manual update is required for repeated scans.
-- Results are uploaded to the SSD dashboard configured for this PoC.
+| Message | Fix |
+|---|---|
+| `Set SSD_UPLOAD_URL ...` / `Set SSD_TOKEN ...` | export both variables before running |
+| `Docker is not running, or this user can't use it.` | `sudo systemctl start docker`, or add the user to the `docker` group |
+| `Can't tell which repository this is.` | set `REPO_URL` |
+| `SSD did not accept the scan` | check the token and that the SSD URL is reachable; the log path is printed |

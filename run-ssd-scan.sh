@@ -1,135 +1,171 @@
 #!/bin/bash
+# Scans source code or a container image with the SSD scanner CLI and submits the results to SSD.
+# Usage: SSD_UPLOAD_URL=https://<ssd-host> SSD_TOKEN=<team-token> ./run-ssd-scan.sh <target>
+#   /path/to/repo            source-code folder (a git clone; for a plain folder also set REPO_URL)
+#   /path/to/source.tar.gz   source-code archive: .tar, .tar.gz or .tgz (set REPO_URL)
+#   /path/to/image.tar       container image saved with: docker save <image> -o image.tar
+#   <image>:<tag>            container image already on this machine (saved to a temporary tar first)
+# Optional: REPO_URL, BRANCH_NAME (default main), SBOM_TOOLS (default cdxgen,syft), SCANNERS, CLI_IMAGE.
+# The script does not wait for SSD: it exits once the scan is submitted. SSD then processes it and shows the results in the UI.
+set -uo pipefail
 
-set -euo pipefail
+TARGET="${1:-}"
+CLI_IMAGE="${CLI_IMAGE:-docker.io/opsmx11/ssd-scanner-cli:v0.6.17}"
+# SSD reads the SBOM of the tool the team selected, so both common SBOM tools run by default
+SBOM_TOOLS="${SBOM_TOOLS:-cdxgen,syft}"
+WORK_DIR=""
 
-RED="\033[0;31m"
-GREEN="\033[0;32m"
-YELLOW="\033[1;33m"
-BLUE="\033[0;34m"
-NC="\033[0m"
-
-log_info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
-log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-
-cleanup() {
-  local exit_code=$?
-  if [ $exit_code -ne 0 ]; then
-    log_error "Scan execution failed. Exit code: $exit_code"
-  fi
-}
+fail() { echo "[ERROR] $*" >&2; exit 1; }
+sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
+cleanup() { [ -z "$WORK_DIR" ] || rm -rf "$WORK_DIR"; }
 trap cleanup EXIT
 
-# --------------------------------------------------
-# Default source directory = current working directory
-# User can optionally pass a custom path
-# --------------------------------------------------
-SOURCE_DIR="${1:-$PWD}"
+[ -n "$TARGET" ] || fail "Nothing to scan. Usage: ./run-ssd-scan.sh <source folder | source .tar/.tar.gz | image .tar | image:tag>"
+[ -n "${SSD_UPLOAD_URL:-}" ] || fail "Set SSD_UPLOAD_URL to your SSD address: export SSD_UPLOAD_URL=https://<ssd-host>"
+[ -n "${SSD_TOKEN:-}" ] || fail "Set SSD_TOKEN to your SSD team token: export SSD_TOKEN='...'"
+command -v docker >/dev/null 2>&1 || fail "Docker is not installed."
+docker info >/dev/null 2>&1 || fail "Docker is not running, or this user can't use it."
 
-ARTIFACT_NAME=$(basename "$SOURCE_DIR")
-REPOSITORY_URL="https://OpsMx-POC@dev.azure.com/OpsMx-POC/ask/_git/ask"
-BRANCH="master"
-UPLOAD_URL="https://gail-july.netupd.opsmx.org"
-CLI_IMAGE="docker.io/opsmx11/ssd-scanner-cli:v0.6.9"
-TOOL="azure"
+STAMP="$(date +%Y%m%d%H%M%S)"
+SRC=""
+if [ -d "$TARGET" ]; then
+  MODE=source
+  SRC="$(cd "$TARGET" && pwd)"
+  [ -n "$(ls -A "$SRC" 2>/dev/null)" ] || fail "$SRC is empty or not readable."
+  { [ -f "$SRC/manifest.json" ] || [ -f "$SRC/oci-layout" ]; } && fail "$SRC is an unpacked container image. Pass the original .tar instead."
+elif [ -f "$TARGET" ]; then
+  FILE_DIR="$(cd "$(dirname "$TARGET")" && pwd)"
+  FILE="$(basename "$TARGET")"
+  LIST="$(tar -tf "$FILE_DIR/$FILE" 2>/dev/null)" || fail "$FILE is not a tar archive. Pass a folder, a .tar/.tar.gz/.tgz, or an image name."
+  # A container image tar has manifest.json or oci-layout at its root; anything else is source code
+  if grep -qE '^(\./)?(manifest\.json|oci-layout)$' <<<"$LIST"; then
+    MODE=image
+    case "$FILE" in *.tar) ;; *) fail "A container image must be a plain .tar (docker save <image> -o image.tar), not $FILE." ;; esac
+    case "$FILE" in *[!A-Za-z0-9._-]*) fail "Rename $FILE to use only letters, digits, '.', '_' and '-'." ;; esac
+  else
+    MODE=source
+  fi
+elif docker image inspect "$TARGET" >/dev/null 2>&1; then
+  MODE=image
+  WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ssd-scan-XXXXXX")"
+  FILE_DIR="$WORK_DIR"
+  FILE="$(printf '%s' "${TARGET##*/}" | tr -c 'A-Za-z0-9._-' '-').tar"
+  echo "Saving image $TARGET to a temporary tar..."
+  docker save "$TARGET" -o "$FILE_DIR/$FILE" || fail "Could not save image $TARGET."
+  chmod a+rx "$WORK_DIR" && chmod a+r "$FILE_DIR/$FILE"
+else
+  fail "$TARGET is not a folder, a file, or an image on this machine (for a registry image run 'docker pull $TARGET' first)."
+fi
 
-# Token must be exported before running
-SSD_TOKEN="${SSD_TOKEN:-}"
+if [ "$MODE" = source ]; then
+  IS_GIT=0
+  [ -n "$SRC" ] && git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1 && IS_GIT=1
+  # Remote URL without credentials, as https
+  url="${REPO_URL:-}"
+  [ -n "$url" ] || [ "$IS_GIT" -eq 0 ] || url="$(git -C "$SRC" remote get-url origin 2>/dev/null)"
+  [ -n "$url" ] || fail "Can't tell which repository this is. Set REPO_URL to its https URL, e.g. export REPO_URL=https://github.com/<org>/<repo>"
+  url="$(printf '%s' "$url" | sed -E 's#^[^@/]+@([^:/]+):#https://\1/#; s#^ssh://[^@/]+@([^/:]+)(:[0-9]+)?/#https://\1/#; s#^(https?://)[^@/]+@#\1#; s#\.git$##; s#^https://(ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)/v3/([^/]+)/([^/]+)/([^/]+)$#https://dev.azure.com/\2/\3/_git/\4#')"
+  BRANCH=""
+  [ "$IS_GIT" -eq 0 ] || BRANCH="$(git -C "$SRC" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  { [ -z "$BRANCH" ] || [ "$BRANCH" = HEAD ]; } && BRANCH="${BRANCH_NAME:-main}"
+  COMMIT=local
+  [ "$IS_GIT" -eq 0 ] || COMMIT="$(git -C "$SRC" rev-parse --short=7 HEAD 2>/dev/null || echo local)"
+  # No dots in the name (SSD would read Contoso.Web as a file extension) and a version unique per run
+  NAME="$(printf '%s' "$(basename "$url")" | tr -c 'A-Za-z0-9-' '-')"
+  VERSION="$COMMIT-$STAMP"
+  # SSD keys an extension-less artifact on sha256("<name>_<version>"), so the results link is known up front
+  SHA="$(printf '%s_%s' "$NAME" "$VERSION" | sha256)"
 
-# Auto-generate unique build id and artifact tag
-UNIQUE_ID=$(date +%Y%m%d%H%M%S)
+  # Scan a world-readable copy: the scanner runs as another user in the container, and the original stays untouched
+  WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ssd-scan-XXXXXX")"
+  if [ -n "$SRC" ]; then
+    cp -a "$SRC/." "$WORK_DIR/" || fail "Could not copy $SRC."
+  else
+    tar -xf "$FILE_DIR/$FILE" -C "$WORK_DIR" || fail "Could not extract $FILE."
+  fi
+  chmod -R a+rX "$WORK_DIR"
+  SOURCE_DIR="$WORK_DIR"
+  # An archive that wraps everything in one top-level folder is scanned from inside that folder
+  TOP="$(ls -A "$WORK_DIR")"
+  [ "$(grep -c . <<<"$TOP")" -eq 1 ] && [ -d "$WORK_DIR/$TOP" ] && [ -z "$SRC" ] && SOURCE_DIR="$WORK_DIR/$TOP"
+  [ -n "$(ls -A "$SOURCE_DIR")" ] || fail "No source files found to scan."
+  SCANNERS="${SCANNERS:-$SBOM_TOOLS,trivy,opengrep}"
+  SHOWN="$NAME:$VERSION"
+else
+  VERSION="$STAMP"
+  # The image keeps its .tar name: SSD keys it on sha256("<file>:<tag>") unless the tag is already in the file name
+  case "$FILE" in *"$VERSION"*) SHA="$(printf '%s' "$FILE" | sha256)" ;; *) SHA="$(printf '%s:%s' "$FILE" "$VERSION" | sha256)" ;; esac
+  SCANNERS="${SCANNERS:-$SBOM_TOOLS}"
+  SHOWN="${FILE%.tar}:$VERSION"
+fi
 
-echo
+LOG="$(mktemp -t ssd-scan.XXXXXX.log)"
+LINK="${SSD_UPLOAD_URL%/}/ui/artifact-security/generated?artifactSha=sha256%3A$SHA"
+
 echo "============================================================"
-echo "        OpsMx Delivery Shield - PoC Scan Runner"
+echo " SSD $MODE scan"
+if [ "$MODE" = source ]; then
+  echo "  repository : $url"
+  echo "  path       : ${SRC:-$FILE_DIR/$FILE}"
+  echo "  branch     : $BRANCH"
+else
+  echo "  image tar  : $FILE"
+fi
+echo "  artifact   : $SHOWN"
+echo "  scanners   : $SCANNERS"
+echo "  SSD        : $SSD_UPLOAD_URL"
+echo "  image      : $CLI_IMAGE"
 echo "============================================================"
-echo
 
-log_info "Source directory : $SOURCE_DIR"
-log_info "Artifact name    : $ARTIFACT_NAME"
-log_info "Build ID         : $UNIQUE_ID"
-log_info "Artifact Tag     : $UNIQUE_ID"
-
-echo
-log_info "Performing pre-flight checks..."
-
-# Check source directory
-if [ ! -d "$SOURCE_DIR" ]; then
-  log_error "Source directory does not exist: $SOURCE_DIR"
-  exit 1
+if [ "$MODE" = source ]; then
+  docker run --rm \
+    -v "$SOURCE_DIR:/home/scanner/source" \
+    "$CLI_IMAGE" \
+      --scanners="$SCANNERS" \
+      --cdxgen-scanners=sourcecodesbom \
+      --syft-scanners=sourcecodesbom \
+      --grype-scanners=sourcecodesbom \
+      --grype-include-locations=false \
+      --trivy-scanners=codelicensescan,codesecretscan \
+      --source-code-path=/home/scanner/source \
+      --artifact-type=file \
+      --artifact-path=/home/scanner/source \
+      --artifact-name="$NAME" \
+      --artifact-tag="$VERSION" \
+      --repository-url="$url" \
+      --branch="$BRANCH" \
+      --build-id="$STAMP" \
+      --upload-url="$SSD_UPLOAD_URL" \
+      --ssd-token="$SSD_TOKEN" 2>&1 | tee "$LOG"
+else
+  # --artifact-type=tar reads the image archive; grype must emit CycloneDX (include-locations=false) or SSD rejects it
+  docker run --rm \
+    -v "$FILE_DIR:/home/scanner/source" \
+    "$CLI_IMAGE" \
+      --scanners="$SCANNERS" \
+      --cdxgen-scanners=sbom \
+      --syft-scanners=sbom \
+      --grype-scanners=sbom \
+      --grype-include-locations=false \
+      --source-code-path=/home/scanner/source \
+      --artifact-type=tar \
+      --artifact-path="/home/scanner/source/$FILE" \
+      --artifact-name="$FILE" \
+      --artifact-tag="$VERSION" \
+      --build-id="$STAMP" \
+      --upload-url="$SSD_UPLOAD_URL" \
+      --ssd-token="$SSD_TOKEN" 2>&1 | tee "$LOG"
 fi
+RC=${PIPESTATUS[0]}
 
-if [ ! -r "$SOURCE_DIR" ]; then
-  log_error "Source directory is not readable: $SOURCE_DIR"
-  exit 1
+PLAIN="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG")"
+echo "============================================================"
+[ "$RC" -eq 0 ] || { echo " FAILED: the scanner exited with code $RC"; echo " log: $LOG"; exit "$RC"; }
+# The scanner exits 0 even when SSD rejects the scan, so check that the build event was accepted
+if ! printf '%s\n' "$PLAIN" | grep -q 'Successfully sent build event'; then
+  echo " FAILED: SSD did not accept the scan (check the token and that SSD is reachable)"; echo " log: $LOG"; exit 1
 fi
-
-if [ -z "$(ls -A "$SOURCE_DIR" 2>/dev/null)" ]; then
-  log_error "Source directory is empty: $SOURCE_DIR"
-  exit 1
-fi
-
-# Check Docker installation
-if ! command -v docker >/dev/null 2>&1; then
-  log_error "Docker is not installed or not available in PATH."
-  exit 1
-fi
-
-# Check Docker daemon
-if ! docker info >/dev/null 2>&1; then
-  log_error "Docker daemon is not running or current user cannot access Docker."
-  log_error "Try: sudo systemctl start docker"
-  exit 1
-fi
-
-# Check SSD token
-if [ -z "$SSD_TOKEN" ]; then
-  log_error "SSD_TOKEN is not set."
-  echo
-  echo "Please export the token before running the scan:"
-  echo
-  echo "  export SSD_TOKEN='your-token-here'"
-  echo "  ./run-ssd-scan.sh"
-  echo
-  exit 1
-fi
-
-# Pull image
-log_info "Pulling SSD CLI image: $CLI_IMAGE"
-
-if ! docker pull "$CLI_IMAGE"; then
-  log_error "Failed to pull Docker image."
-  exit 1
-fi
-
-log_success "Pre-flight checks completed successfully."
-
-echo
-log_info "Starting SSD scan..."
-
-docker run --rm \
-  -v "$SOURCE_DIR:/home/scanner/source:rw" \
-  "$CLI_IMAGE" \
-    --scanners=cdxgen,semgrep,trivy \
-    --cdxgen-scanners=sourcecodesbom \
-    --trivy-scanners=codelicensescan,codesecretscan \
-    --source-code-path=/home/scanner/source \
-    --repository-url="$REPOSITORY_URL" \
-    --branch="$BRANCH" \
-    --build-id="$UNIQUE_ID" \
-    --upload-url="$UPLOAD_URL" \
-    --offline-mode=false \
-    --artifact-type=file \
-    --artifact-name="$ARTIFACT_NAME" \
-    --artifact-path=/home/scanner/source \
-    --keep-results=true \
-    --debug=false \
-    --artifact-tag="$UNIQUE_ID" \
-    --ssd-token="$SSD_TOKEN"
-
-echo
-log_success "SSD scan completed successfully."
-log_info "Build ID     : $UNIQUE_ID"
-log_info "Artifact Tag : $UNIQUE_ID"
-echo
+echo " SUBMITTED: $SHOWN"
+echo " SSD is processing it now; results appear in the UI in a few minutes:"
+echo "   $LINK"
+echo " log: $LOG"
